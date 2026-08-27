@@ -251,21 +251,27 @@
       .join("");
   }
 
+  // Always show every period used anywhere in the school, so an entity with
+  // no class in a given period still shows that row (as empty) instead of
+  // the row silently disappearing.
+  var GLOBAL_MAX_PERIOD = (function () {
+    var max = 1;
+    classCodes.forEach(function (code) {
+      classes[code].entries.forEach(function (e) {
+        if (e.period > max) max = e.period;
+      });
+    });
+    return max;
+  })();
+
   function buildTableHtml(type, key, targetSide) {
     var cells = buildCellMap(type, key);
-    var periodsUsed = {};
-    Object.keys(cells).forEach(function (k) {
-      var p = parseInt(k.split("-")[1], 10);
-      periodsUsed[p] = true;
-    });
-    var periods = Object.keys(periodsUsed)
-      .map(Number)
-      .sort(function (a, b) {
-        return a - b;
-      });
-    if (!periods.length) {
+    var hasAnyEntry = Object.keys(cells).length > 0;
+    if (!hasAnyEntry) {
       return '<div class="panel-placeholder"><span class="ph-strong">本學期查無排課</span></div>';
     }
+    var periods = [];
+    for (var p = 1; p <= GLOBAL_MAX_PERIOD; p++) periods.push(p);
     var today = todayIndex();
     var html = '<table class="sched-table"><thead><tr><th class="period-col">節</th>';
     for (var d = 0; d < 5; d++) {
