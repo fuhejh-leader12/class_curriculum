@@ -15,12 +15,9 @@
     suggestions: document.getElementById("suggestions"),
     quickBrowse: document.getElementById("quick-browse"),
     browseList: document.getElementById("browse-list"),
-    result: document.getElementById("result"),
-    resultTitle: document.getElementById("result-title"),
-    resultMeta: document.getElementById("result-meta"),
-    weekGrid: document.getElementById("week-grid"),
-    backBtn: document.getElementById("back-btn"),
-    emptyState: document.getElementById("empty-state"),
+    panelLeft: document.getElementById("panel-left"),
+    panelRight: document.getElementById("panel-right"),
+    swapBtn: document.getElementById("swap-btn"),
     termLabel: document.getElementById("term-label"),
     footerNote: document.getElementById("footer-note"),
   };
@@ -29,15 +26,12 @@
   els.footerNote.textContent =
     "資料來源：" + DATA.generated + "班課表。如發現課表有誤，請聯繫教務處。";
 
+  // state.left / state.right: { type: 'class'|'teacher', key: string } | null
+  var state = { left: null, right: null };
+
   function todayIndex() {
     var d = new Date().getDay(); // 0 Sun ... 6 Sat
     return d >= 1 && d <= 5 ? d - 1 : -1;
-  }
-
-  function classLabel(code) {
-    var c = classes[code];
-    if (!c) return code;
-    return c.type === "elective" ? code + "（選修／技藝分組）" : code + " 班";
   }
 
   // ---------- Search / suggestions ----------
@@ -85,7 +79,6 @@
       return;
     }
     els.quickBrowse.hidden = true;
-    els.emptyState.hidden = true;
     if (items.length === 0) {
       els.suggestions.hidden = false;
       els.suggestions.innerHTML = '<div class="no-result">找不到符合的班級或老師，換個關鍵字試試看</div>';
@@ -98,7 +91,7 @@
         var badgeText = it.type === "teacher" ? "老師" : it.type === "elective" ? "選修" : "班級";
         return (
           '<button class="suggestion-item" data-type="' +
-          it.type +
+          (it.type === "elective" ? "class" : it.type) +
           '" data-key="' +
           encodeURIComponent(it.key) +
           '">' +
@@ -119,18 +112,25 @@
       .join("");
   }
 
+  function resetSearchUI() {
+    els.input.value = "";
+    els.clearBtn.hidden = true;
+    els.suggestions.hidden = true;
+    els.browseList.hidden = true;
+    els.quickBrowse.hidden = false;
+  }
+
   els.suggestions.addEventListener("click", function (e) {
     var btn = e.target.closest(".suggestion-item");
     if (!btn) return;
     var type = btn.getAttribute("data-type");
     var key = decodeURIComponent(btn.getAttribute("data-key"));
-    if (type === "teacher") selectTeacher(key);
-    else selectClass(key);
+    setPanel("left", type, key);
+    resetSearchUI();
   });
 
   els.input.addEventListener("input", function () {
     els.clearBtn.hidden = !els.input.value;
-    hideResult();
     renderSuggestions(els.input.value);
   });
 
@@ -138,17 +138,14 @@
     if (e.key === "Enter") {
       var items = buildSuggestions(els.input.value);
       if (items.length) {
-        if (items[0].type === "teacher") selectTeacher(items[0].key);
-        else selectClass(items[0].key);
+        setPanel("left", items[0].type === "teacher" ? "teacher" : "class", items[0].key);
+        resetSearchUI();
       }
     }
   });
 
   els.clearBtn.addEventListener("click", function () {
-    els.input.value = "";
-    els.clearBtn.hidden = true;
-    hideResult();
-    renderSuggestions("");
+    resetSearchUI();
     els.input.focus();
   });
 
@@ -170,7 +167,6 @@
     }
     list.sort();
     els.browseList.hidden = false;
-    els.emptyState.hidden = true;
     els.suggestions.hidden = true;
     els.browseList.innerHTML = list
       .map(function (code) {
@@ -182,161 +178,189 @@
   els.browseList.addEventListener("click", function (e) {
     var btn = e.target.closest("button[data-code]");
     if (!btn) return;
-    selectClass(decodeURIComponent(btn.getAttribute("data-code")));
+    setPanel("left", "class", decodeURIComponent(btn.getAttribute("data-code")));
   });
 
-  // ---------- Result rendering ----------
+  // ---------- Panel rendering ----------
 
-  function hideResult() {
-    els.result.hidden = true;
-    els.emptyState.hidden = false;
+  function entityLabel(type, key) {
+    if (type === "teacher") return key + " 老師";
+    var c = classes[key];
+    if (!c) return key;
+    return c.type === "elective" ? key : key + " 班";
   }
 
-  function showResultShell(title, meta) {
-    els.emptyState.hidden = true;
-    els.result.hidden = false;
-    els.suggestions.hidden = true;
-    els.browseList.hidden = true;
-    els.quickBrowse.hidden = true;
-    els.resultTitle.textContent = title;
-    els.resultMeta.textContent = meta;
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function periodItemHtml(period, contentHtml) {
-    return (
-      '<li class="period-item"><span class="period-num">' +
-      period +
-      '</span><div class="period-info">' +
-      contentHtml +
-      "</div></li>"
-    );
-  }
-
-  function whoLink(type, key, extraNote) {
-    var safe = encodeURIComponent(key);
-    return (
-      '<button class="who-btn" data-type="' +
-      type +
-      '" data-key="' +
-      safe +
-      '">' +
-      key +
-      "</button>" +
-      (extraNote ? '<span class="split-note">' + extraNote + "</span>" : "")
-    );
-  }
-
-  function renderWeekGrid(entriesByDay, today) {
-    var html = "";
-    for (var d = 0; d < 5; d++) {
-      var dayEntries = entriesByDay[d] || [];
-      html += '<div class="day-col" data-day="' + d + '">';
-      html +=
-        '<h3 class="day-title"><span>' +
-        DAYS[d] +
-        "</span>" +
-        (d === today ? '<span class="today-mark">今天</span>' : "") +
-        "</h3>";
-      if (!dayEntries.length) {
-        html += '<div class="day-empty">本日無安排</div>';
-      } else {
-        html += '<ol class="period-list">';
-        dayEntries.forEach(function (e) {
-          html += periodItemHtml(e.period, e.html);
-        });
-        html += "</ol>";
-      }
-      html += "</div>";
+  function entityMeta(type, key) {
+    if (type === "teacher") {
+      var list = teachers[key] || [];
+      return "每週授課 " + list.length + " 節";
     }
-    els.weekGrid.innerHTML = html;
-    els.weekGrid.querySelectorAll(".who-btn").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var type = btn.getAttribute("data-type");
-        var key = decodeURIComponent(btn.getAttribute("data-key"));
-        if (type === "teacher") selectTeacher(key);
-        else selectClass(key);
-      });
-    });
+    var c = classes[key];
+    if (!c) return "";
+    if (c.type === "elective") return "選修／技藝分組";
+    return c.homeroom_teacher ? "導師　" + c.homeroom_teacher : "班級課表";
   }
 
-  function selectClass(code) {
-    var c = classes[code];
-    if (!c) return;
-    els.input.value = code;
-    els.clearBtn.hidden = false;
-    var byDay = {};
-    c.entries.forEach(function (e) {
-      byDay[e.day] = byDay[e.day] || [];
-      var contentHtml;
-      if (e.split) {
-        contentHtml = e.split
-          .map(function (g) {
-            return (
-              '<div class="period-line"><span class="subject">' +
-              g.subject +
-              "</span>" +
-              whoLink("teacher", g.teacher) +
-              "</div>"
-            );
-          })
-          .join("") + '<div class="split-note">同節次有 2 組選修／輔導同時進行</div>';
-      } else {
-        contentHtml =
-          '<div class="period-line"><span class="subject">' +
-          e.subject +
-          "</span>" +
-          (e.teacher ? whoLink("teacher", e.teacher) : "") +
-          "</div>";
+  // Build a day(0-4)-period map of entries for a given entity.
+  function buildCellMap(type, key) {
+    var cells = {}; // "d-p" -> array of {subject, whoType, whoKey, note}
+    function push(d, p, subject, whoType, whoKey, note) {
+      var k = d + "-" + p;
+      cells[k] = cells[k] || [];
+      cells[k].push({ subject: subject, whoType: whoType, whoKey: whoKey, note: note });
+    }
+    if (type === "class") {
+      var c = classes[key];
+      if (!c) return cells;
+      c.entries.forEach(function (e) {
+        if (e.split) {
+          e.split.forEach(function (g) {
+            push(e.day, e.period, g.subject, "teacher", g.teacher, g.week);
+          });
+        } else {
+          push(e.day, e.period, e.subject, e.teacher ? "teacher" : null, e.teacher, null);
+        }
+      });
+    } else {
+      var list = teachers[key] || [];
+      list.forEach(function (e) {
+        push(e.day, e.period, e.subject, "class", e.class, e.week || null);
+      });
+    }
+    return cells;
+  }
+
+  function cellHtml(entries, targetSide) {
+    if (!entries || !entries.length) return '<span class="cell-empty">－</span>';
+    return entries
+      .map(function (en) {
+        var tag = en.note ? '<span class="cell-week-tag">' + en.note + "</span>" : "";
+        var who = en.whoKey
+          ? '<button class="cell-who" data-side="' +
+            targetSide +
+            '" data-type="' +
+            en.whoType +
+            '" data-key="' +
+            encodeURIComponent(en.whoKey) +
+            '">' +
+            en.whoKey +
+            "</button>"
+          : "";
+        return '<div class="cell-entry">' + tag + '<span class="cell-subject">' + en.subject + "</span>" + who + "</div>";
+      })
+      .join("");
+  }
+
+  function buildTableHtml(type, key, targetSide) {
+    var cells = buildCellMap(type, key);
+    var periodsUsed = {};
+    Object.keys(cells).forEach(function (k) {
+      var p = parseInt(k.split("-")[1], 10);
+      periodsUsed[p] = true;
+    });
+    var periods = Object.keys(periodsUsed)
+      .map(Number)
+      .sort(function (a, b) {
+        return a - b;
+      });
+    if (!periods.length) {
+      return '<div class="panel-placeholder"><span class="ph-strong">本學期查無排課</span></div>';
+    }
+    var today = todayIndex();
+    var html = '<table class="sched-table"><thead><tr><th class="period-col">節</th>';
+    for (var d = 0; d < 5; d++) {
+      html +=
+        '<th data-today="' +
+        (d === today ? "1" : "0") +
+        '">' +
+        DAYS[d].replace("星期", "") +
+        (d === today ? '<span class="today-dot"></span>' : "") +
+        "</th>";
+    }
+    html += "</tr></thead><tbody>";
+    periods.forEach(function (p) {
+      html += '<tr><td class="period-cell">' + p + "</td>";
+      for (var d = 0; d < 5; d++) {
+        html += "<td>" + cellHtml(cells[d + "-" + p], targetSide) + "</td>";
       }
-      byDay[e.day].push({ period: e.period, html: contentHtml });
+      html += "</tr>";
     });
-    Object.keys(byDay).forEach(function (d) {
-      byDay[d].sort(function (a, b) {
-        return a.period - b.period;
-      });
-    });
-    var meta = c.type === "elective" ? "選修／技藝分組" : c.homeroom_teacher ? "導師　" + c.homeroom_teacher : "班級課表";
-    showResultShell(classLabel(code).replace("（選修／技藝分組）", ""), meta);
-    renderWeekGrid(byDay, todayIndex());
+    html += "</tbody></table>";
+    return html;
   }
 
-  function selectTeacher(name) {
-    var list = teachers[name];
-    if (!list) return;
-    els.input.value = name;
-    els.clearBtn.hidden = false;
-    var byDay = {};
-    list.forEach(function (e) {
-      byDay[e.day] = byDay[e.day] || [];
-      var note = e.group ? "（選修／輔導分組）" : "";
-      var contentHtml =
-        '<div class="period-line"><span class="subject">' +
-        e.subject +
-        "</span>" +
-        whoLink("class", e.class) +
-        "</div>" +
-        (note ? '<div class="split-note">' + note + "</div>" : "");
-      byDay[e.day].push({ period: e.period, html: contentHtml });
-    });
-    Object.keys(byDay).forEach(function (d) {
-      byDay[d].sort(function (a, b) {
-        return a.period - b.period;
-      });
-    });
-    var totalCount = list.length;
-    showResultShell(name + " 老師", "每週授課 " + totalCount + " 節");
-    renderWeekGrid(byDay, todayIndex());
+  function placeholderHtml(side) {
+    var otherLabel = side === "left" ? "右側" : "左側";
+    return (
+      '<div class="panel-placeholder">' +
+      '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>' +
+      (side === "left"
+        ? '<span class="ph-strong">輸入班級或老師姓名開始查詢</span><span>結果會顯示在這裡</span>'
+        : '<span class="ph-strong">點選' + otherLabel + "課表中的姓名或班級</span><span>即可在這裡比較課表</span>") +
+      "</div>"
+    );
   }
 
-  els.backBtn.addEventListener("click", function () {
-    els.input.value = "";
-    els.clearBtn.hidden = true;
-    hideResult();
-    renderSuggestions("");
-    els.input.focus();
+  function renderPanel(side) {
+    var el = side === "left" ? els.panelLeft : els.panelRight;
+    var sel = state[side];
+    if (!sel) {
+      el.innerHTML = placeholderHtml(side);
+      return;
+    }
+    var targetSide = side === "left" ? "right" : "left";
+    var tableHtml = buildTableHtml(sel.type, sel.key, targetSide);
+    el.innerHTML =
+      '<div class="panel-header"><div class="panel-heading">' +
+      '<span class="panel-title">' +
+      entityLabel(sel.type, sel.key) +
+      "</span>" +
+      '<span class="panel-meta">' +
+      entityMeta(sel.type, sel.key) +
+      "</span>" +
+      "</div>" +
+      '<button class="panel-clear" data-side="' +
+      side +
+      '" aria-label="清除">×</button>' +
+      "</div>" +
+      tableHtml;
+  }
+
+  function setPanel(side, type, key) {
+    state[side] = { type: type, key: key };
+    renderPanel(side);
+  }
+
+  function clearPanel(side) {
+    state[side] = null;
+    renderPanel(side);
+  }
+
+  // Delegate clicks on cell "who" links and panel clear buttons.
+  document.addEventListener("click", function (e) {
+    var who = e.target.closest(".cell-who");
+    if (who) {
+      var side = who.getAttribute("data-side");
+      var type = who.getAttribute("data-type");
+      var key = decodeURIComponent(who.getAttribute("data-key"));
+      setPanel(side, type, key);
+      return;
+    }
+    var clearBtn = e.target.closest(".panel-clear");
+    if (clearBtn) {
+      clearPanel(clearBtn.getAttribute("data-side"));
+    }
+  });
+
+  els.swapBtn.addEventListener("click", function () {
+    var tmp = state.left;
+    state.left = state.right;
+    state.right = tmp;
+    renderPanel("left");
+    renderPanel("right");
   });
 
   // init
-  hideResult();
+  renderPanel("left");
+  renderPanel("right");
 })();
