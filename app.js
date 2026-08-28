@@ -366,6 +366,290 @@
     renderPanel("right");
   });
 
+  // ---------- 調課小幫手: 找代課／調課人選 + 衝堂快速確認 ----------
+
+  var BUSY = {}; // "day-period" -> { teacherName: true }
+  var SUBJECT_TEACHERS = {}; // subject -> { teacherName: true }
+
+  function markBusy(d, p, name) {
+    var k = d + "-" + p;
+    BUSY[k] = BUSY[k] || {};
+    BUSY[k][name] = true;
+  }
+  function markSubject(subject, name) {
+    SUBJECT_TEACHERS[subject] = SUBJECT_TEACHERS[subject] || {};
+    SUBJECT_TEACHERS[subject][name] = true;
+  }
+  classCodes.forEach(function (code) {
+    classes[code].entries.forEach(function (e) {
+      if (e.split) {
+        e.split.forEach(function (g) {
+          markBusy(e.day, e.period, g.teacher);
+          markSubject(g.subject, g.teacher);
+        });
+      } else if (e.teacher) {
+        markBusy(e.day, e.period, e.teacher);
+        markSubject(e.subject, e.teacher);
+      }
+    });
+  });
+
+  function freeTeachersAt(d, p) {
+    var busy = BUSY[d + "-" + p] || {};
+    return teacherNames.filter(function (n) {
+      return !busy[n];
+    });
+  }
+  function classTeacherSet(code) {
+    var set = {};
+    var c = classes[code];
+    if (!c) return set;
+    c.entries.forEach(function (e) {
+      if (e.split) e.split.forEach(function (g) { set[g.teacher] = true; });
+      else if (e.teacher) set[e.teacher] = true;
+    });
+    return set;
+  }
+
+  var toolEls = {
+    subClassInput: document.getElementById("sub-class-input"),
+    subClassSuggestions: document.getElementById("sub-class-suggestions"),
+    subSlotSelect: document.getElementById("sub-slot-select"),
+    subResult: document.getElementById("sub-result"),
+    confTeacherInput: document.getElementById("conf-teacher-input"),
+    confTeacherSuggestions: document.getElementById("conf-teacher-suggestions"),
+    confDaySelect: document.getElementById("conf-day-select"),
+    confPeriodSelect: document.getElementById("conf-period-select"),
+    confResult: document.getElementById("conf-result"),
+  };
+
+  function renderMiniSuggestions(listEl, matches, onPick) {
+    if (!matches.length) {
+      listEl.hidden = true;
+      listEl.innerHTML = "";
+      return;
+    }
+    listEl.hidden = false;
+    listEl.innerHTML = matches
+      .map(function (m) {
+        return '<button type="button" data-key="' + encodeURIComponent(m) + '">' + m + "</button>";
+      })
+      .join("");
+    Array.prototype.forEach.call(listEl.querySelectorAll("button"), function (btn) {
+      btn.addEventListener("click", function () {
+        onPick(decodeURIComponent(btn.getAttribute("data-key")));
+        listEl.hidden = true;
+        listEl.innerHTML = "";
+      });
+    });
+  }
+
+  function jumpToLeft(type, key) {
+    setPanel("left", type, key);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // ---- 找代課／調課人選 ----
+
+  toolEls.subClassInput.addEventListener("input", function () {
+    var q = toolEls.subClassInput.value.trim();
+    if (!q) {
+      toolEls.subClassSuggestions.hidden = true;
+      return;
+    }
+    var matches = rankMatches(classCodes, q).slice(0, 10);
+    renderMiniSuggestions(toolEls.subClassSuggestions, matches, function (code) {
+      toolEls.subClassInput.value = code;
+      populateSubSlotSelect(code);
+    });
+  });
+
+  function populateSubSlotSelect(code) {
+    var c = classes[code];
+    if (!c) return;
+    var entries = [];
+    c.entries.forEach(function (e) {
+      if (e.split) {
+        e.split.forEach(function (g) {
+          entries.push({ day: e.day, period: e.period, subject: g.subject, teacher: g.teacher, week: g.week });
+        });
+      } else if (e.teacher) {
+        entries.push({ day: e.day, period: e.period, subject: e.subject, teacher: e.teacher });
+      }
+    });
+    entries.sort(function (a, b) {
+      return a.day - b.day || a.period - b.period;
+    });
+    toolEls.subSlotSelect.disabled = entries.length === 0;
+    toolEls.subSlotSelect.innerHTML = entries.length
+      ? entries
+          .map(function (e, i) {
+            var label = DAYS[e.day].replace("星期", "") + " 第" + e.period + "節：" + e.subject + (e.week ? "（" + e.week + "）" : "");
+            return '<option value="' + i + '">' + label + "</option>";
+          })
+          .join("")
+      : "<option>此班無排課</option>";
+    toolEls.subSlotSelect._entries = entries;
+    toolEls.subSlotSelect._classCode = code;
+    if (entries.length) renderSubResult(code, entries[0]);
+    else toolEls.subResult.innerHTML = "";
+  }
+
+  toolEls.subSlotSelect.addEventListener("change", function () {
+    var entries = toolEls.subSlotSelect._entries || [];
+    var idx = parseInt(toolEls.subSlotSelect.value, 10);
+    if (!isNaN(idx) && entries[idx]) renderSubResult(toolEls.subSlotSelect._classCode, entries[idx]);
+  });
+
+  function candidateGroupHtml(title, list, dotLabel, collapsed) {
+    if (!list.length) return "";
+    var chips = list
+      .map(function (n) {
+        return '<button type="button" class="candidate-chip" data-name="' + encodeURIComponent(n) + '">' + n + "</button>";
+      })
+      .join("");
+    if (collapsed) {
+      return (
+        '<details class="candidate-group candidate-group-collapsible"><summary class="candidate-group-title"><span class="rank-dot">' +
+        dotLabel +
+        "</span>" +
+        title +
+        "（" +
+        list.length +
+        " 位）</summary>" +
+        '<div class="candidate-chips">' +
+        chips +
+        "</div></details>"
+      );
+    }
+    return (
+      '<div class="candidate-group"><p class="candidate-group-title"><span class="rank-dot">' +
+      dotLabel +
+      "</span>" +
+      title +
+      '</p><div class="candidate-chips">' +
+      chips +
+      "</div></div>"
+    );
+  }
+
+  function renderSubResult(code, slot) {
+    var free = freeTeachersAt(slot.day, slot.period);
+    var classTeachers = classTeacherSet(code);
+    var subjectTeachers = SUBJECT_TEACHERS[slot.subject] || {};
+
+    var g1 = [], g2 = [], g3 = [];
+    free.forEach(function (name) {
+      if (name === slot.teacher) return;
+      if (classTeachers[name]) g1.push(name);
+      else if (subjectTeachers[name]) g2.push(name);
+      else g3.push(name);
+    });
+    g1.sort(); g2.sort(); g3.sort();
+
+    var weekNote = slot.week ? "（" + slot.week + "）" : "";
+    var html =
+      '<div class="slot-summary">' +
+      code +
+      "　" +
+      DAYS[slot.day] +
+      " 第" +
+      slot.period +
+      "節" +
+      weekNote +
+      "　目前：<strong>" +
+      slot.subject +
+      " " +
+      (slot.teacher || "") +
+      "</strong></div>";
+
+    html += candidateGroupHtml("該班任課老師", g1, "1", false);
+    html += candidateGroupHtml("該科任課老師", g2, "2", false);
+    html += candidateGroupHtml("其他空堂老師", g3, "3", true);
+
+    if (!g1.length && !g2.length && !g3.length) {
+      html += '<p class="no-candidates">這個時段目前沒有空堂老師</p>';
+    }
+
+    toolEls.subResult.innerHTML = html;
+    Array.prototype.forEach.call(toolEls.subResult.querySelectorAll(".candidate-chip"), function (btn) {
+      btn.addEventListener("click", function () {
+        jumpToLeft("teacher", decodeURIComponent(btn.getAttribute("data-name")));
+      });
+    });
+  }
+
+  // ---- 衝堂快速確認 ----
+
+  var confSelectedTeacher = null;
+
+  toolEls.confPeriodSelect.innerHTML = (function () {
+    var opts = "";
+    for (var p = 1; p <= GLOBAL_MAX_PERIOD; p++) opts += '<option value="' + p + '">第' + p + "節</option>";
+    return opts;
+  })();
+
+  toolEls.confTeacherInput.addEventListener("input", function () {
+    var q = toolEls.confTeacherInput.value.trim();
+    if (!q) {
+      toolEls.confTeacherSuggestions.hidden = true;
+      return;
+    }
+    var matches = rankMatches(teacherNames, q).slice(0, 10);
+    renderMiniSuggestions(toolEls.confTeacherSuggestions, matches, function (name) {
+      toolEls.confTeacherInput.value = name;
+      confSelectedTeacher = name;
+      renderConfResult();
+    });
+  });
+
+  toolEls.confDaySelect.addEventListener("change", renderConfResult);
+  toolEls.confPeriodSelect.addEventListener("change", renderConfResult);
+
+  function renderConfResult() {
+    if (!confSelectedTeacher) {
+      toolEls.confResult.innerHTML = "";
+      return;
+    }
+    var d = parseInt(toolEls.confDaySelect.value, 10);
+    var p = parseInt(toolEls.confPeriodSelect.value, 10);
+    var busy = BUSY[d + "-" + p] || {};
+    if (busy[confSelectedTeacher]) {
+      var list = teachers[confSelectedTeacher] || [];
+      var found = null;
+      list.forEach(function (e) {
+        if (e.day === d && e.period === p) found = e;
+      });
+      var info = found
+        ? found.subject +
+          "　" +
+          '<button type="button" class="who-btn" data-key="' +
+          encodeURIComponent(found.class) +
+          '">' +
+          found.class +
+          "</button>"
+        : "";
+      toolEls.confResult.innerHTML = '<div class="conflict-status busy">✕ 有課：' + info + "</div>";
+      var btn = toolEls.confResult.querySelector(".who-btn");
+      if (btn) {
+        btn.addEventListener("click", function () {
+          jumpToLeft("class", decodeURIComponent(btn.getAttribute("data-key")));
+        });
+      }
+    } else {
+      toolEls.confResult.innerHTML = '<div class="conflict-status free">✓ 空堂，可以安排</div>';
+    }
+  }
+
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest("#sub-class-input") && !e.target.closest("#sub-class-suggestions")) {
+      toolEls.subClassSuggestions.hidden = true;
+    }
+    if (!e.target.closest("#conf-teacher-input") && !e.target.closest("#conf-teacher-suggestions")) {
+      toolEls.confTeacherSuggestions.hidden = true;
+    }
+  });
+
   // init
   renderPanel("left");
   renderPanel("right");
