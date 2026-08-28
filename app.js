@@ -551,8 +551,8 @@
     var g1 = [], g2 = [], g3 = [];
     free.forEach(function (name) {
       if (name === slot.teacher) return;
-      if (classTeachers[name]) g1.push(name);
-      else if (subjectTeachers[name]) g2.push(name);
+      if (subjectTeachers[name]) g1.push(name);
+      else if (classTeachers[name]) g2.push(name);
       else g3.push(name);
     });
     g1.sort(); g2.sort(); g3.sort();
@@ -573,8 +573,8 @@
       (slot.teacher || "") +
       "</strong></div>";
 
-    html += candidateGroupHtml("該班任課老師", g1, "1", false);
-    html += candidateGroupHtml("該科任課老師", g2, "2", false);
+    html += candidateGroupHtml("該科任課老師", g1, "1", false);
+    html += candidateGroupHtml("該班任課老師", g2, "2", false);
     html += candidateGroupHtml("其他空堂老師", g3, "3", true);
 
     if (!g1.length && !g2.length && !g3.length) {
