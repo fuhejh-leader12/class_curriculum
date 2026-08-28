@@ -464,6 +464,16 @@
     });
   });
 
+  toolEls.subClassInput.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    var matches = rankMatches(classCodes, toolEls.subClassInput.value.trim());
+    if (matches.length) {
+      toolEls.subClassInput.value = matches[0];
+      populateSubSlotSelect(matches[0]);
+      toolEls.subClassSuggestions.hidden = true;
+    }
+  });
+
   function populateSubSlotSelect(code) {
     var c = classes[code];
     if (!c) return;
@@ -601,6 +611,17 @@
       confSelectedTeacher = name;
       renderConfResult();
     });
+  });
+
+  toolEls.confTeacherInput.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    var matches = rankMatches(teacherNames, toolEls.confTeacherInput.value.trim());
+    if (matches.length) {
+      toolEls.confTeacherInput.value = matches[0];
+      confSelectedTeacher = matches[0];
+      toolEls.confTeacherSuggestions.hidden = true;
+      renderConfResult();
+    }
   });
 
   toolEls.confDaySelect.addEventListener("change", renderConfResult);
